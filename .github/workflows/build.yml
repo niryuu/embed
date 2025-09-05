@@ -117,8 +117,8 @@ jobs:
       - name: 'Checkout geolonia/cdn.geolonia.com'
         uses: actions/checkout@v4
         with:
-          token: ${{ secrets.PAT_FOR_CDN_GEOLONIA_COM }}
-          repository: geolonia/cdn.geolonia.com
+          #token: ${{ secrets.PAT_FOR_CDN_GEOLONIA_COM }}
+          repository: niryuu/test
           path: ./cdn.geolonia.com
       - name: 'Setup CDN deployment directories'
         run: |
