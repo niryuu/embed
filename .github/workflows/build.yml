@@ -5,25 +5,25 @@ name: build
 
 on:
   push:
-    branches: [master]
-    tags: ['*']
+    branches: [master, 'v[0-9]+']
+    tags: ['v*']
   pull_request:
-    branches: [master]
+    branches: ['v[0-9]+']
 
 jobs:
   build:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        node-version: ['18.x']
+        node-version: ['20.x']
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: Use Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
       - name: Cache node_modules
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: node_modules
           key: modules-cache-v1-${{ runner.os }}-${{ hashFiles('yarn.lock') }}
@@ -32,7 +32,7 @@ jobs:
       - run: yarn test
       - run: yarn build
       - name: save the built
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         if: "!failure()"
         with:
           retention-days: 1
@@ -48,16 +48,16 @@ jobs:
       - build
     if: ${{ github.ref == 'refs/heads/master' }}
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-node@v3
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
-          node-version: '18.x'
+          node-version: '20.x'
       - name: Clean repo
         run: |
           git checkout --orphan gh-pages
           git rm -rf . > /dev/null 2>&1
       - name: load the built
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: the-built
       - name: Setup and deploy Github Pages
@@ -77,44 +77,93 @@ jobs:
       - build
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-node@v3
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
-          tag_name: 'v%s'
-          node-version: '18.x'
+          node-version: '20.x'
           registry-url: 'https://registry.npmjs.org'
           scope: '@geolonia'
+      - name: Extract version from tag
+        id: version
+        run: |
+          # タグからバージョンを抽出 (例: refs/tags/v1.2.3 -> 1.2.3)
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          
+          # メジャーバージョンを抽出 (例: 1.2.3 -> 1)
+          MAJOR_VERSION=$(echo $VERSION | cut -d. -f1)
+          echo "major_version=$MAJOR_VERSION" >> $GITHUB_OUTPUT
+          
+          # プレリリースかどうかをチェック
+          if [[ $VERSION == *"-"* ]]; then
+            echo "is_prerelease=true" >> $GITHUB_OUTPUT
+          else
+            echo "is_prerelease=false" >> $GITHUB_OUTPUT
+          fi
       - name: load the built
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: the-built
       - name: 'Publish to NPM (latest)'
-        if: "!contains(github.ref, '-pre.')"
+        if: steps.version.outputs.is_prerelease == 'false'
         run: npm publish --access=public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       - name: 'Publish to NPM (next)'
-        if: "contains(github.ref, '-pre.')"
+        if: steps.version.outputs.is_prerelease == 'true'
         run: npm publish --access=public --tag=next
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       - name: 'Checkout geolonia/cdn.geolonia.com'
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           token: ${{ secrets.PAT_FOR_CDN_GEOLONIA_COM }}
           repository: geolonia/cdn.geolonia.com
           path: ./cdn.geolonia.com
+      - name: 'Setup CDN deployment directories'
+        run: |
+          cd ./cdn.geolonia.com
+          
+          # メジャーバージョン用ディレクトリ (例: /v1/embed)
+          mkdir -p public/v${{ steps.version.outputs.major_version }}/embed
+          
+          # 完全バージョン用ディレクトリ (例: /v1.2.3/embed)
+          mkdir -p public/v${{ steps.version.outputs.version }}/embed
       - name: 'Build Embed API'
         run: npm run build:embed
         working-directory: ./cdn.geolonia.com
+      - name: 'Deploy to CDN paths'
+        run: |
+          cd ./cdn.geolonia.com
+          
+          # メジャーバージョン用ディレクトリをクリア (例: /v1/embed)
+          rm -rf public/v${{ steps.version.outputs.major_version }}/embed/*
+          
+          # ビルドされたファイルを両方のパスにコピー
+          # メジャーバージョン用 (例: /v1/embed)
+          cp -r dist/embed/* public/v${{ steps.version.outputs.major_version }}/embed/
+          
+          # 完全バージョン用 (例: /v1.2.3/embed)
+          cp -r dist/embed/* public/v${{ steps.version.outputs.version }}/embed/
+          
+          # Git設定とコミット
+          git config user.name "$GITHUB_ACTOR"
+          git config user.email "${GITHUB_ACTOR}@users.noreply.github.com"
+          git add .
+          git commit -m "Deploy @geolonia/embed v${{ steps.version.outputs.version }}"
       - name: 'Create PR in geolonia/cdn.geolonia.com'
-        uses: peter-evans/create-pull-request@v4
+        uses: peter-evans/create-pull-request@v7
         with:
           token: ${{ secrets.PAT_FOR_CDN_GEOLONIA_COM }}
           path: ./cdn.geolonia.com
-          title: "Release @geolonia/embed"
+          title: "Release @geolonia/embed v${{ steps.version.outputs.version }}"
           body: |
-            Release @geolonia/embed
+            Release @geolonia/embed v${{ steps.version.outputs.version }}
+            
+            **デプロイ先:**
+            - `/v${{ steps.version.outputs.major_version }}/embed/` (メジャーバージョン)
+            - `/v${{ steps.version.outputs.version }}/embed/` (完全バージョン)
+            
             https://github.com/geolonia/embed の GitHub Actions によって自動作成
           labels: 🚀♻️リリース定期タスク
-          reviewers: keichan34
+          branch: release/embed-v${{ steps.version.outputs.version }}
