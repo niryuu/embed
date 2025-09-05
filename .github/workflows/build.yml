@@ -106,7 +106,7 @@ jobs:
           name: the-built
       - name: 'Publish to NPM (latest)'
         if: steps.version.outputs.is_prerelease == 'false'
-        run: npm publish --access=public
+        run: npm publish --dry-run
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       - name: 'Publish to NPM (next)'
